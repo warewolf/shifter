@@ -13,7 +13,7 @@ struct Calibration cal = { 512,512,512, 512} ;
 
 unsigned int x_pos = 0, y_pos = 0;
 
-// #define DEBUG 
+#define DEBUG 
 // #define IN_GEAR_LED
 
 #define X_PIN A0
@@ -25,25 +25,14 @@ unsigned int x_pos = 0, y_pos = 0;
 #define EXIT_CALIBRATION 10*1000 // 10 seconds
 
 #define SHIFTER_X_COLS 4 // side to side, almost always 3 to 4
-#define SHIFTER_Y_ROWS 4 // up + down, almost always 4 
+#define SHIFTER_Y_ROWS 5 // up + down, almost always 4 
 
 unsigned int x_ranges[10]; //  = { 0, 256, 512, 768, 1024};
 unsigned int y_ranges[10]; //  = { 0, 342, 684, 1024};
 
+unsigned int gear2button[SHIFTER_X_COLS+1][SHIFTER_Y_ROWS+1];
+
 #define GEAR_X_OFFT 4
-
-#define GEAR_1 (1 << GEAR_X_OFFT) | SHIFTER_Y_ROWS
-#define GEAR_2 (1 << GEAR_X_OFFT) | 1
-
-#define GEAR_3 (2 << GEAR_X_OFFT) | SHIFTER_Y_ROWS
-#define GEAR_4 (2 << GEAR_X_OFFT) | 1
-
-#define GEAR_5 (3 << GEAR_X_OFFT) | SHIFTER_Y_ROWS
-#define GEAR_6 (3 << GEAR_X_OFFT) | 1
-
-#define GEAR_7 (4 << GEAR_X_OFFT) | SHIFTER_Y_ROWS
-#define GEAR_8 (4 << GEAR_X_OFFT) | 1
-
 #define NEUTRAL 254
 
 Joystick_ Joystick(JOYSTICK_DEFAULT_REPORT_ID,JOYSTICK_TYPE_JOYSTICK,
@@ -69,24 +58,35 @@ void setup() {
   #endif
 
   // fill in the ranges
-  for (int i = 0; i <= SHIFTER_X_COLS; i++) {
-    x_ranges[i] = i * (1024/SHIFTER_X_COLS);
+  for (unsigned int x_i = 0; x_i <= SHIFTER_X_COLS; x_i++) {
+    x_ranges[x_i] = x_i * (1024/SHIFTER_X_COLS);
     #ifdef DEBUG
     Serial.print("X range ");
-    Serial.print(i);
+    Serial.print(x_i);
     Serial.print(": ");
-    Serial.println(i * (1024/SHIFTER_X_COLS));
+    Serial.println(x_i * (1024/SHIFTER_X_COLS));
     #endif
   }
 
-  for (int i = 0; i <= SHIFTER_Y_ROWS; i++) {
-    y_ranges[i] = i * (1024/SHIFTER_Y_ROWS);
+  for (unsigned int y_i = 0; y_i <= SHIFTER_Y_ROWS; y_i++) {
+    y_ranges[y_i] = y_i * (1024/SHIFTER_Y_ROWS);
     #ifdef DEBUG
     Serial.print("Y range ");
-    Serial.print(i);
+    Serial.print(y_i);
     Serial.print(": ");
-    Serial.println(i * (1024/SHIFTER_Y_ROWS));
+    Serial.println(y_i * (1024/SHIFTER_Y_ROWS));
     #endif
+  }
+
+  // create "gear" to "button" map
+  byte button = 0;
+  for (int x = 1; x <= SHIFTER_X_COLS+1; x++) {
+    // fill in "neutral" for all Y positions
+    for (int y = 1; y <= SHIFTER_Y_ROWS+1; y++) {
+      gear2button[x][y] = NEUTRAL;
+    }
+    gear2button[x][SHIFTER_Y_ROWS] = button++; // up, 1st, 3rd, 5th gear
+    gear2button[x][1] = button++; // down, 2nd, 4th, 6th gear
   }
 
   analogReference(EXTERNAL); // 5v on 5v boards
@@ -242,7 +242,7 @@ void calibrate() {
     }
 
     #ifdef DEBUG
-    if ((looptime >> 9) & 0b1 == 1) {
+    if ((looptime >> 12) & 0b1 == 1) {
       Serial.print("X_MIN: ");
       Serial.println(cal.x_min);
       Serial.print("X_MAX: ");
@@ -260,9 +260,9 @@ void calibrate() {
     }
 
     #ifdef DEBUG
-    delay(50);
     Joystick.sendState();
     #endif
+    delay(50);
   }
 
   #ifdef DEBUG
@@ -317,18 +317,28 @@ void loop() {
   byte gear = 0;
 
   // X axis
-  for ( byte i = 1; i <= SHIFTER_X_COLS; i++) {
-    if (x_pos <= x_ranges[i]) {
-      gear |= (i<< GEAR_X_OFFT);
-      break;
+  for ( byte x = 1; x <= SHIFTER_X_COLS; x++) {
+     Serial.print("X range :");
+     Serial.println(x_ranges[x]);
+    if (x_pos <= x_ranges[x]) {
+      gear |= (x<< GEAR_X_OFFT);
+      Serial.print("X Coord :");
+      Serial.println(x);
+      // break;
     }
   }
   
   // y axis
-  for ( byte i = 1; i <= SHIFTER_Y_ROWS; i++) {
-    if (y_pos <= y_ranges[i]) {
-      gear |= i;
-      break;
+  for ( byte y = 1; y <= SHIFTER_Y_ROWS; y++) {
+     Serial.print("Y range :");
+     Serial.println(y_ranges[y]);
+    if (y_pos <= y_ranges[y]) {
+      gear |= y;
+      Serial.print("Y is less than :");
+      Serial.print(y_ranges[y]);
+      Serial.print(", Y Coord :");
+      Serial.println(y);
+      // break;
     }
   }
 
@@ -362,8 +372,27 @@ void loop() {
 */
 
   // remember, (1,1) is the origin!
+  
+  byte button = gear2button[gear >> GEAR_X_OFFT][gear & 0xF];
 
+  if (previous_gear != button) {
+    // gear changed
+    if (button == NEUTRAL) {
+      // we're shifting into neutral, release the previous button
+      Joystick.releaseButton(previous_gear);
+      Joystick.sendState();
+    } else {
+      // we're shifting directly from a gear into another gear (wtf? okay)
+      Joystick.releaseButton(previous_gear);
+      Joystick.pressButton(button);
+      Joystick.sendState();
+    }
+    previous_gear = button;
+  } else {
+    // current button == previous button, do nothing.
+  }
 
+  /*
   switch (gear) {
 
     // X = ..., Y = 2
@@ -471,6 +500,7 @@ void loop() {
       }
       break;
   }
+  */
   
   #ifdef DEBUG
   delay(50);
