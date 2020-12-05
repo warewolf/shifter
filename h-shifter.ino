@@ -1,13 +1,6 @@
 #include <Joystick.h>
 #include <EEPROM.h>
 
-byte pin2button[4][2] = { 
-  {2,8}, // pin 2 == joy button 0
-  {3,9},
-  {4,10}, 
-  {5,11} 
-};
-
 struct Calibration {
   unsigned int x_min;
   unsigned int x_max;
@@ -18,9 +11,10 @@ struct Calibration {
 // give it some bullshit values
 struct Calibration cal = { 512,512,512, 512} ;
 
+unsigned int x_pos = 0, y_pos = 0;
 
 // #define DEBUG 
-
+// #define IN_GEAR_LED
 
 #define X_PIN A0
 #define Y_PIN A1
@@ -30,22 +24,36 @@ struct Calibration cal = { 512,512,512, 512} ;
 
 #define EXIT_CALIBRATION 10*1000 // 10 seconds
 
-#define SHIFTER_COLS 4 // side to side, almost always 3 to 4
-#define SHIFTER_ROWS 4 // up + down, almost always 4
+#define SHIFTER_X_COLS 4 // side to side, almost always 3 to 4
+#define SHIFTER_Y_ROWS 4 // up + down, almost always 4 
 
-#define GEAR_0 0 << 3 | SHIFTER_ROWS-1
-#define GEAR_1 0 << 3 | 0
-#define GEAR_2 1 << 3 | SHIFTER_ROWS-1
-#define GEAR_3 1 << 3 | 0
-#define GEAR_4 2 << 3 | SHIFTER_ROWS-1
-#define GEAR_5 2 << 3 | 0
-#define GEAR_6 3 << 3 | SHIFTER_ROWS-1
-#define GEAR_7 3 << 3 | 0
+unsigned int x_ranges[10]; //  = { 0, 256, 512, 768, 1024};
+unsigned int y_ranges[10]; //  = { 0, 342, 684, 1024};
 
+#define GEAR_X_OFFT 4
+
+#define GEAR_1 (1 << GEAR_X_OFFT) | SHIFTER_Y_ROWS
+#define GEAR_2 (1 << GEAR_X_OFFT) | 1
+
+#define GEAR_3 (2 << GEAR_X_OFFT) | SHIFTER_Y_ROWS
+#define GEAR_4 (2 << GEAR_X_OFFT) | 1
+
+#define GEAR_5 (3 << GEAR_X_OFFT) | SHIFTER_Y_ROWS
+#define GEAR_6 (3 << GEAR_X_OFFT) | 1
+
+#define GEAR_7 (4 << GEAR_X_OFFT) | SHIFTER_Y_ROWS
+#define GEAR_8 (4 << GEAR_X_OFFT) | 1
+
+#define NEUTRAL 254
 
 Joystick_ Joystick(JOYSTICK_DEFAULT_REPORT_ID,JOYSTICK_TYPE_JOYSTICK,
-  SHIFTER_COLS*2, 0,                  // Button Count, Hat Switch Count
-  false, false, false,     // X and Y, but no Z Axis
+  SHIFTER_X_COLS*2, 0,                  // Button Count, Hat Switch Count
+  #ifdef DEBUG
+  true, true, // X and Y
+  #else
+  false, false, // X and Y
+  #endif
+  false,     // but no Z Axis
   false, false, false,   // No Rx, Ry, or Rz
   false, false,          // No rudder or throttle
   false, false, false);  // No accelerator, brake, or steering
@@ -57,12 +65,33 @@ void setup() {
   #ifdef DEBUG
   Serial.begin(115200);
   while (!Serial) { }
+    delay(7000);
   #endif
+
+  // fill in the ranges
+  for (int i = 0; i <= SHIFTER_X_COLS; i++) {
+    x_ranges[i] = i * (1024/SHIFTER_X_COLS);
+    #ifdef DEBUG
+    Serial.print("X range ");
+    Serial.print(i);
+    Serial.print(": ");
+    Serial.println(i * (1024/SHIFTER_X_COLS));
+    #endif
+  }
+
+  for (int i = 0; i <= SHIFTER_Y_ROWS; i++) {
+    y_ranges[i] = i * (1024/SHIFTER_Y_ROWS);
+    #ifdef DEBUG
+    Serial.print("Y range ");
+    Serial.print(i);
+    Serial.print(": ");
+    Serial.println(i * (1024/SHIFTER_Y_ROWS));
+    #endif
+  }
 
   analogReference(EXTERNAL); // 5v on 5v boards
 
   #ifdef DEBUG
-    delay(7000);
     Serial.print("MCUSR: ");
     if(MCUSR_copy & 1<<PORF)  Serial.print("PORF, ");
     if(MCUSR_copy & 1<<EXTRF) Serial.print("EXTRF, ");
@@ -72,24 +101,29 @@ void setup() {
     Serial.println("");
   #endif
   
- 
-  // Initialize Button Pins
-  pinMode(2, INPUT_PULLUP);
-  pinMode(3, INPUT_PULLUP);
-  pinMode(4, INPUT_PULLUP);
-  pinMode(5, INPUT_PULLUP);
   pinMode(X_PIN, INPUT);
   pinMode(Y_PIN, INPUT);
+  #ifdef IN_GEAR_LED
   pinMode(LED_BUILTIN, OUTPUT);
+  #endif
 
-  Joystick.begin();
+  // Initialize Joystick Library
+  Joystick.begin(false);
 
   // jump into calibration mode if our reset pin was mashed
   if(MCUSR_copy & 1<<EXTRF) {
     calibrate();
   }
 
-  EEPROM.get(12, cal);
+  EEPROM.get(0, cal);
+
+  // sane defaults for when eeprom is blank
+  if (cal.x_min > 1023 ) {
+    cal.x_min = 0; 
+    cal.x_max = 1023; 
+    cal.y_min = 0; 
+    cal.y_max = 1023; 
+  }
 
   #ifdef DEBUG
   Serial.print("CAL X_MIN: ");
@@ -102,7 +136,6 @@ void setup() {
   Serial.println(cal.y_max);
   #endif
 
-  // Initialize Joystick Library
 }
 
 void calibrate() {
@@ -119,8 +152,10 @@ void calibrate() {
   
 
   // turn on LED to signal the start of the calibration period:
+  #ifdef IN_GEAR_LED
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, blinky);
+  #endif
 
   // timeout after 10 seconds of "no change"
   last_change = looptime;
@@ -134,8 +169,11 @@ void calibrate() {
     x_val = analogRead(X_PIN);
     y_val = analogRead(Y_PIN);
 
+    #ifdef DEBUG
     Joystick.setXAxis(x_val);
     Joystick.setYAxis(y_val);
+    #endif
+
     // we only care about one axis at a time for last_change timeout
     if (x_val >> 3 != x_last >> 3) {
       last_change = looptime;
@@ -146,6 +184,7 @@ void calibrate() {
       y_last = y_val;
       break;
     } 
+    Joystick.sendState();
     delay(50);
     looptime = millis();
   }
@@ -176,6 +215,11 @@ void calibrate() {
     x_val = analogRead(X_PIN);
     y_val = analogRead(Y_PIN);
 
+    #ifdef DEBUG
+    Joystick.setXAxis(x_val);
+    Joystick.setYAxis(y_val);
+    #endif
+
     // we only care about one axis at a time for last_change timeout
     if (x_val >> 3 != x_last >> 3) {
       last_change = looptime;
@@ -198,7 +242,7 @@ void calibrate() {
     }
 
     #ifdef DEBUG
-    if (looptime >> 9 & 0b1 == 1) {
+    if ((looptime >> 9) & 0b1 == 1) {
       Serial.print("X_MIN: ");
       Serial.println(cal.x_min);
       Serial.print("X_MAX: ");
@@ -210,34 +254,41 @@ void calibrate() {
     }
     #endif
 
-    if ((looptime >> 3 & 0b1) == blinky) {
+    if (((looptime >> 6) & 0b1) == blinky) {
       blinky = !blinky;
       digitalWrite(LED_BUILTIN, blinky);
     }
 
+    #ifdef DEBUG
     delay(50);
+    Joystick.sendState();
+    #endif
   }
 
   #ifdef DEBUG
   Serial.println("Exiting calibration");
   #endif
-  EEPROM.put(12, cal);
+  EEPROM.put(0, cal);
 
   // signal the end of the calibration period turning off the LED
+  #ifdef IN_GEAR_LED
   digitalWrite(LED_BUILTIN, false);
+  #endif
 
 }
 
-unsigned int x_pos = 0, y_pos = 0;
 
 // what gear we were last in, so we know which button to release
-unsigned char previous_gear = 0;
+unsigned char previous_gear = NEUTRAL;
 
 void neutral() {
-  if (previous_gear != 254)
+  if (previous_gear != NEUTRAL) {
     Joystick.releaseButton(previous_gear);
+  }
+  #ifdef IN_GEAR_LED
   digitalWrite(LED_BUILTIN, false);
-  previous_gear = 254;
+  #endif
+  previous_gear = NEUTRAL;
 }
 
 // the loop function runs over and over again forever
@@ -245,145 +296,183 @@ void loop() {
   
 
   // adjust to sensor calibration
-  x_pos = map(analogRead(X_PIN), cal.x_min, cal.x_max, 0, 1023);
-  y_pos = map(analogRead(Y_PIN), cal.y_min, cal.y_max, 0, 1023);
-
-  // set joystick axises
-  // Joystick.setXAxis(x_pos);
-  // Joystick.setYAxis(y_pos);
-
-  byte x_coord = 0, y_coord = 0;
   #if INVERT_X == true
-  x_coord = map ( x_pos, 1023,0, 0, SHIFTER_COLS-1);
+  x_pos = map(analogRead(X_PIN), cal.x_min, cal.x_max, 1023, 0);
   #else
-  x_coord = map ( x_pos, 0,1023, 0, SHIFTER_COLS-1);
+  x_pos = map(analogRead(X_PIN), cal.x_min, cal.x_max, 0, 1023);
   #endif
 
   #if INVERT_Y == true
-  y_coord = map ( y_pos, 1023,0, 0, SHIFTER_ROWS-1);
+  y_pos = map(analogRead(Y_PIN), cal.y_min, cal.y_max, 1023, 0);
   #else
-  y_coord = map ( y_pos, 0,1023, 0, SHIFTER_ROWS-1);
+  y_pos = map(analogRead(Y_PIN), cal.y_min, cal.y_max, 0, 1023);
   #endif
+
+  // set joystick axises
+  #ifdef DEBUG
+  Joystick.setXAxis(x_pos);
+  Joystick.setYAxis(y_pos);
+  #endif
+
+  byte gear = 0;
+
+  // X axis
+  for ( byte i = 1; i <= SHIFTER_X_COLS; i++) {
+    if (x_pos <= x_ranges[i]) {
+      gear |= (i<< GEAR_X_OFFT);
+      break;
+    }
+  }
+  
+  // y axis
+  for ( byte i = 1; i <= SHIFTER_Y_ROWS; i++) {
+    if (y_pos <= y_ranges[i]) {
+      gear |= i;
+      break;
+    }
+  }
 
   #ifdef DEBUG
   Serial.print("X: ");
-  Serial.print(x_coord);
+  Serial.print(gear >> GEAR_X_OFFT);
+  Serial.print(", X pos: ");
+  Serial.print(x_pos);
   Serial.print(", Y: ");
-  Serial.println(y_coord);
+  Serial.print(gear & 0xF);
+  Serial.print(", Y pos: ");
+  Serial.print(y_pos);
+  Serial.print(", gear: ");
+  Serial.println(gear);
   #endif
-  byte gear = x_coord << 3 | y_coord;
+
 
 /*
  ( X,Y ) coordinates of a 8-gear shifter pattern
 
- R(0,2)   1(1,2)   3(2,2)   5(3,2)
+ R(1,3)   1(2,3)   3(3,3)   5(4,3)
  |        |        |        |
  |        |        |        |
  xxxxxxxxxxxxxxxxxxxxxxxxxxxx
- |(0,1)   |(1,1)   |(2,1)   |(3,1)
+ |(1,2)   |(2,2)   |(3,2)   |(4,2)
  |        |        |        |
  |        |        |        |
- x(0,0)   2(1,0)   4(2,0)   6(3,0)
+ x(1,1)   2(2,1)   4(3,1)   6(4,1)
 
- 0,0 is the origin!
+ 1,1 is the origin!
 */
 
-  // remember, (0,0) is the origin!
+  // remember, (1,1) is the origin!
 
 
   switch (gear) {
 
     // X = ..., Y = 2
-    case GEAR_0 : // 0,2
+    case GEAR_1 : // 1,3
       if (previous_gear != 0) {
         neutral();
         previous_gear = 0;
         Joystick.pressButton(0);
+  #ifdef IN_GEAR_LED
         digitalWrite(LED_BUILTIN, true);
+  #endif
+        Joystick.sendState();
       }
       break;
 
     // X = ..., Y = 0
-    case GEAR_1 : // 0,0
+    case GEAR_2 : // 1,1
       if (previous_gear != 1) {
         neutral();
         previous_gear = 1;
         Joystick.pressButton(1);
+  #ifdef IN_GEAR_LED
         digitalWrite(LED_BUILTIN, true);
+  #endif
+        Joystick.sendState();
       }
       break;
 
-    case GEAR_2 : // 1,2
+    case GEAR_3 : // 2,3
       if (previous_gear != 2) {
         neutral();
         previous_gear = 2;
         Joystick.pressButton(2);
+  #ifdef IN_GEAR_LED
         digitalWrite(LED_BUILTIN, true);
+  #endif
+        Joystick.sendState();
       }
       break;
 
-    case GEAR_3 : // 1,0
+    case GEAR_4 : // 2,1
       if (previous_gear != 3) {
         neutral();
         previous_gear = 3;
         Joystick.pressButton(3);
+  #ifdef IN_GEAR_LED
         digitalWrite(LED_BUILTIN, true);
+  #endif
+        Joystick.sendState();
       }
       break;
     
-    case GEAR_4: // 2,2
+    case GEAR_5: // 3,3
       if (previous_gear != 4) {
         neutral();
         previous_gear = 4;
         Joystick.pressButton(4);
+  #ifdef IN_GEAR_LED
         digitalWrite(LED_BUILTIN, true);
+  #endif
+        Joystick.sendState();
       }
       break;
 
-    case GEAR_5: // 2,0
+    case GEAR_6: // 3,1
       if (previous_gear != 5) {
         neutral();
         previous_gear = 5;
         Joystick.pressButton(5);
+  #ifdef IN_GEAR_LED
         digitalWrite(LED_BUILTIN, true);
+  #endif
+        Joystick.sendState();
       }
       break;
 
-    case GEAR_6: // 3,2
+    case GEAR_7: // 4,3
       if (previous_gear != 6) {
         neutral();
         previous_gear = 6;
         Joystick.pressButton(6);
+  #ifdef IN_GEAR_LED
         digitalWrite(LED_BUILTIN, true);
+  #endif
+        Joystick.sendState();
       }
       break;
 
-    case GEAR_7 : // 3,0
+    case GEAR_8 : // 4,1
       if (previous_gear != 7) {
         neutral();
         previous_gear = 7;
         Joystick.pressButton(7);
+  #ifdef IN_GEAR_LED
         digitalWrite(LED_BUILTIN, true);
+  #endif
+        Joystick.sendState();
       }
       break;
 
     default:
-      neutral();
+      if (previous_gear != NEUTRAL) {
+        neutral();
+        Joystick.sendState();
+      }
       break;
   }
-
   
-  /*
-    for ( int i = 0; i < 4; ++i ) {
-    int currentButtonState = !digitalRead(pin2button[i][0]);
-    if (currentButtonState != lastButtonState[i])
-    {
-      Joystick.setButton(pin2button[i][1], currentButtonState);
-      lastButtonState[i] = currentButtonState;
-    }
-  }
-
-  */
-
+  #ifdef DEBUG
   delay(50);
+  #endif
 }
