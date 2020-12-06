@@ -13,7 +13,7 @@ struct Calibration cal = { 512,512,512, 512} ;
 
 unsigned int x_pos = 0, y_pos = 0;
 
-// #define DEBUG 
+#define DEBUG 
 // #define IN_GEAR_LED
 
 #define X_PIN A0
@@ -25,7 +25,7 @@ unsigned int x_pos = 0, y_pos = 0;
 #define EXIT_CALIBRATION 10*1000 // 10 seconds
 
 #define SHIFTER_X_COLS 4 // side to side, almost always 3 to 4
-#define SHIFTER_Y_ROWS 4 // up + down, almost always 4 
+#define SHIFTER_Y_ROWS 3 // up + down, almost always 4 
 
 unsigned int x_ranges[10]; //  = { 0, 256, 512, 768, 1024};
 unsigned int y_ranges[10]; //  = { 0, 342, 684, 1024};
@@ -103,9 +103,7 @@ void setup() {
   
   pinMode(X_PIN, INPUT);
   pinMode(Y_PIN, INPUT);
-  #ifdef IN_GEAR_LED
   pinMode(LED_BUILTIN, OUTPUT);
-  #endif
 
   // Initialize Joystick Library
   Joystick.begin(false);
@@ -152,9 +150,9 @@ void calibrate() {
   
 
   // turn on LED to signal the start of the calibration period:
-  #ifdef IN_GEAR_LED
   pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, blinky);
+  #ifdef IN_GEAR_LED
+  digitalWrite(LED_BUILTIN, true);
   #endif
 
   // timeout after 10 seconds of "no change"
@@ -254,7 +252,7 @@ void calibrate() {
     }
     #endif
 
-    if (((looptime >> 6) & 0b1) == blinky) {
+    if (((looptime >> 8) & 0b1) == blinky) {
       blinky = !blinky;
       digitalWrite(LED_BUILTIN, blinky);
     }
