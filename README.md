@@ -14,3 +14,8 @@ Design goals:
 ## Dependencies
 
 You will need a copy of the [ArduinoJoystickLibrary](https://github.com/MHeironimus/ArduinoJoystickLibrary)
+
+## Requirements
+
+A pair of linear (not latching) hall effect sensors
+An arduino micro
