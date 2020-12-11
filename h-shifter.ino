@@ -14,22 +14,67 @@ struct Calibration cal = { 512,512,512, 512} ;
 
 unsigned int x_pos = 0, y_pos = 0;
 
-// #define DEBUG 
-#define IN_GEAR_LED
+/*
+
+  Where are your analog sensors connected to?  Define them with X_PIN and Y_PIN.
+
+*/
 
 #define X_PIN A0
 #define Y_PIN A1
 
+/*
+
+  Is up and left on the shifter not the lowest joystick button?  Try flipping INVERT_X and/or INVERT_Y to true
+
+*/
+
 #define INVERT_X false
 #define INVERT_Y false
 
-#define EXIT_CALIBRATION 10*1000 // 10 seconds
+/*
 
-#define SHIFTER_X_COLS 4 // side to side, almost always 3 to 4
-#define SHIFTER_Y_ROWS 3 // up, neutral, down, almost always 3 
+  ENTER_CALIBRATION is a timeout in millis for if you accidentially bump the reset button. 
+  If ENTER_CALIBRATION millis lapse and no movement is detected on the shifter, it bails out of calibration mode and leaves your calibration settings alone.
+  If you wiggle the shifter before the LED goes out, it goes into calibraiton mode.
 
-#define GEAR_X_OFFT 4 // for packing X+Y into one byte for a "gear"
+  TIMEOUT_CALIBRATION is a timeout to _exit_ calibration mode, when the shifter is held still.
+*/
+
+#define ENTER_CALIBRATION 5*1000 // 5 seconds
+#define TIMEOUT_CALIBRATION 10*1000 // 10 seconds
+
+#define SHIFTER_X_COLS 4 // side to side, almost always 3 to 4 1-based index
+#define SHIFTER_Y_ROWS 3 // up, neutral, down, almost always 3  1-based index
+
+#define GEAR_X_OFFT 4 // for packing X+Y into one byte for a "gear".  Don't change this.
 #define NEUTRAL 254 // magic button/gear number representing neutral (no buttons pressed)
+
+/*
+
+Switch/button support: Useful for ATS/ETS gear splitters.  Don't want any switches?  Define BUTTONS to 0.
+
+If you have 0 buttons, your first gear button will be the first joystick button.
+
+If you define BUTTONS to 4, you'll have 4 buttons, and your first gear button will be the fifth button.
+
+*/
+
+// #define BUTTONS 0 // 0-based index, for buttons/switches.  These use internal pullups, so wire these to switch to ground.
+#define BUTTONS 4 // 1-based index, for buttons/switches.  These use internal pullups, so wire these to switch to ground.
+
+#if BUTTONS > 0
+/*
+
+  Set your digital pins here for your switches/buttons.  Remember to separate them by commas.
+
+*/
+byte button_pins[BUTTONS] = {
+  12, 11, 10, 9
+};
+
+byte button_state[BUTTONS];
+#endif
 
 // what gear we were last in, so we know which button to release
 unsigned char previous_gear = NEUTRAL;
@@ -41,28 +86,18 @@ unsigned int gear2button[SHIFTER_X_COLS+1][SHIFTER_Y_ROWS+1]; // these need to b
 
 
 Joystick_ Joystick(JOYSTICK_DEFAULT_REPORT_ID,JOYSTICK_TYPE_JOYSTICK,
-  SHIFTER_X_COLS*2, 0,                  // Button Count, Hat Switch Count
-  #ifdef DEBUG
-  true, true, // yes X and Y axises for debug mode to see where the joystick is
-  #else
-  false, false, // no X and Y in normal mode
-  #endif
-  false,     // but no Z Axis
-  false, false, false,   // No Rx, Ry, or Rz
-  false, false,          // No rudder or throttle
-  false, false, false);  // No accelerator, brake, or steering
+  BUTTONS+(SHIFTER_X_COLS*2), 0, // Button Count, Hat Switch Count
+  false, false, false,           // No X, Y or Z asis
+  false, false, false,           // No Rx, Ry, or Rz
+  false, false,                  // No rudder or throttle
+  false, false, false);          // No accelerator, brake, or steering
 
 void setup() {
   int MCUSR_copy = MCUSR;
+  // clear MCU status register
   MCUSR = 0;
-  #ifdef DEBUG
-  delay(1000);
-  Serial.begin(115200);
-  while (!Serial) { delay(50); }
-    delay(7000);
-  #endif
 
-  // fill in the ranges
+  // Initialize the ranges for the analog sensors
   for (byte i = 0; i < SHIFTER_X_COLS; i++) {
     x_ranges[i] = i * ceil(1024/SHIFTER_X_COLS);
   }
@@ -75,8 +110,19 @@ void setup() {
   // integer math results in < 1024 for the last one, so just add it regardless
   y_ranges[SHIFTER_Y_ROWS] = 1024;
 
+  // switch support, init state
+  #if BUTTONS > 0
+  for (byte button = 0; button < BUTTONS-1; button++) {
+    button_state[button] = false;
+  }
+
+  for(byte i = 0;  i < BUTTONS-1; i++) {
+    pinMode(button_pins[i], INPUT_PULLUP);
+  }
+  #endif
+
   // create "gear" (packed X+Y coord) to "button" map
-  byte button = 0;
+  byte button = BUTTONS; // not BUTTONS-1 here because we use postinc for assigning gear buttons
   for (byte x = 1; x <= SHIFTER_X_COLS; x++) {
     // fill in "neutral" for all Y positions
     for (byte y = 1; y <= SHIFTER_Y_ROWS; y++) {
@@ -87,7 +133,6 @@ void setup() {
   }
 
   analogReference(EXTERNAL); // 5v on 5v boards
-
   pinMode(X_PIN, INPUT);
   pinMode(Y_PIN, INPUT);
   pinMode(LED_BUILTIN, OUTPUT);
@@ -101,6 +146,7 @@ void setup() {
     calibrate();
   }
 
+  // load calibration settings
   EEPROM.get(0, cal);
 
   // sane defaults for when eeprom is blank
@@ -111,22 +157,14 @@ void setup() {
     cal.y_max = 1023; 
   }
 
-  #ifdef DEBUG
-  Serial.print("CAL X_MIN: ");
-  Serial.println(cal.x_min);
-  Serial.print("CAL X_MAX: ");
-  Serial.println(cal.x_max);
-  Serial.print("CAL Y_MIN: ");
-  Serial.println(cal.y_min);
-  Serial.print("CAL Y_MAX: ");
-  Serial.println(cal.y_max);
+  Joystick.sendState();
+  #if BUTTONS > 0
+  // without this delay the first run through loop() doesn't catch the initial state of buttons
+  delay(1500);
   #endif
 }
 
 void calibrate() {
-  #ifdef DEBUG
-  Serial.println("Entering calibration: ");
-  #endif
 
   unsigned int x_last = 512, y_last = 512;
   unsigned int x_val = 0, y_val = 0;
@@ -146,14 +184,9 @@ void calibrate() {
   y_last = analogRead(Y_PIN);
 
   // initial "don't do calibration if someone accidentially hits the reset button" phase
-  while (looptime - last_change < 5*1000 ) {
+  while (looptime - last_change < ENTER_CALIBRATION) {
     x_val = analogRead(X_PIN);
     y_val = analogRead(Y_PIN);
-
-    #ifdef DEBUG
-    Joystick.setXAxis(x_val);
-    Joystick.setYAxis(y_val);
-    #endif
 
     // we only care about one axis at a time for last_change timeout
     if (x_val >> 3 != x_last >> 3) {
@@ -165,16 +198,10 @@ void calibrate() {
       y_last = y_val;
       break;
     } 
-    #ifdef DEBUG
-    Joystick.sendState();
-    #endif
     looptime = millis();
   }
 
   if (last_change == looptime) {
-    #ifdef DEBUG
-    Serial.println("Movement detected, clearing calibration.");
-    #endif
   
     // user moved the joystick, blow away calibration
     cal.x_min = 1024; 
@@ -183,23 +210,16 @@ void calibrate() {
     cal.y_max = 0; 
   } else {
     // user didn't move the joystick, bail.
-    #ifdef DEBUG
-    Serial.println("No movement detected, skipping calibration.");
-    #endif
+    digitalWrite(LED_BUILTIN, false);
     return;
   }
   
-  while (looptime - last_change < EXIT_CALIBRATION) {
+  while (looptime - last_change < TIMEOUT_CALIBRATION) {
     // fetch time and save it for this time around the loop, so we're not repeatedly fetching it
     looptime = millis();
     
     x_val = analogRead(X_PIN);
     y_val = analogRead(Y_PIN);
-
-    #ifdef DEBUG
-    Joystick.setXAxis(x_val);
-    Joystick.setYAxis(y_val);
-    #endif
 
     // we only care about one axis at a time for last_change timeout
     if (x_val >> 3 != x_last >> 3) {
@@ -209,6 +229,7 @@ void calibrate() {
       last_change = looptime;
       y_last = y_val;
     } 
+
         
     if (x_val > cal.x_max) {
       cal.x_max = x_val;
@@ -222,32 +243,14 @@ void calibrate() {
       cal.y_min = y_val;
     }
 
-    #ifdef DEBUG
-    if ((looptime >> 12) & 0b1 == 1) {
-      Serial.print("X_MIN: ");
-      Serial.println(cal.x_min);
-      Serial.print("X_MAX: ");
-      Serial.println(cal.x_max);
-      Serial.print("Y_MIN: ");
-      Serial.println(cal.y_min);
-      Serial.print("Y_MAX: ");
-      Serial.println(cal.y_max);
-    }
-    #endif
-
-    if (((looptime >> 8) & 0b1) == blinky) {
+    // blink the LED to note that we're in calibration mode
+    if (((looptime >> 7) & 0b1) == blinky) {
       blinky = !blinky;
       digitalWrite(LED_BUILTIN, blinky);
     }
 
-    #ifdef DEBUG
-    Joystick.sendState();
-    #endif
   }
 
-  #ifdef DEBUG
-  Serial.println("Exiting calibration");
-  #endif
   EEPROM.put(0, cal);
 
   // signal the end of the calibration period turning off the LED
@@ -260,8 +263,19 @@ void loop() {
   
   unsigned int x_real = analogRead(X_PIN);
   unsigned int y_real = analogRead(Y_PIN);
-  // adjust to sensor calibration
+  bool change_detected = false;
 
+  /*
+
+  Hey! the real world is wobbly.  Sometimes someone can push a sensor further than they did before.  The reason we have..
+
+     x_real < cal.x_min ? cal.x_min : x_real
+
+  .. is because we need to cap the min and max read from the analog sensor to what our current calibration min and max ar, otherwise the Arduino map() function will roll over and cause weird results.
+
+  */
+
+  // adjust to sensor calibration
   #if INVERT_X == true
   x_pos = map(x_real < cal.x_min ? cal.x_min : x_real, cal.x_min, cal.x_max, 1023, 1);
   #else
@@ -274,18 +288,16 @@ void loop() {
   y_pos = map(y_real < cal.y_min ? cal.y_min : y_real, cal.y_min, cal.y_max, 1, 1023);
   #endif
 
-  // set joystick axises
-  #ifdef DEBUG
-  Joystick.setXAxis(x_pos);
-  Joystick.setYAxis(y_pos);
-  #endif
-
-  byte gear = 0;
 
   /*
     for position -> coordinate lookups, we skip the 0th index of the ranges array
     because the 0th index is 0, and 0 is less than _everything_.
+
+    This bit here joins together the X and Y coordinate into _one_ value,
+    so we can use a lookup table.
+
   */
+  byte gear = 0;
 
   // X axis
   for ( byte i = 1; i <= SHIFTER_X_COLS; i++) {
@@ -303,19 +315,6 @@ void loop() {
     }
   }
 
-  #ifdef DEBUG
-  Serial.print("X: ");
-  Serial.print(gear >> GEAR_X_OFFT);
-  Serial.print(", X pos: ");
-  Serial.print(x_pos);
-  Serial.print(", Y: ");
-  Serial.print(gear & 0xF);
-  Serial.print(", Y pos: ");
-  Serial.print(y_pos);
-  Serial.print(", gear: ");
-  Serial.println(gear);
-  #endif
-
   byte button = gear2button[gear >> GEAR_X_OFFT][gear & 0xF];
 
   if (previous_gear != button) {
@@ -323,25 +322,46 @@ void loop() {
     if (button == NEUTRAL) {
       // we're shifting into neutral, release the previous button
       Joystick.releaseButton(previous_gear);
-      Joystick.sendState();
-      #ifdef IN_GEAR_LED
-      digitalWrite(LED_BUILTIN, false);
-      #endif
+      change_detected = true;
     } else {
       // we're shifting directly from a gear into another gear w/o passing through neutral (wtf? okay)
       Joystick.releaseButton(previous_gear);
       Joystick.pressButton(button);
-      Joystick.sendState();
-      #ifdef IN_GEAR_LED
-      digitalWrite(LED_BUILTIN, true);
-      #endif
+      change_detected = true;
     }
     previous_gear = button;
   } else {
     // current button == previous button, do nothing.
   }
 
-  #ifdef DEBUG
-  delay(150);
+  /*
+
+  Toggle switch / button support
+
+  */
+  #if BUTTONS > 0
+
+  for (byte button = 0; button <= BUTTONS; button++) {
+    // switches are internal pull up, so a low is "on"
+    bool state = digitalRead(button_pins[button]) == LOW;
+
+    if (button_state[button] != state) {
+      if (state == true) {
+        Joystick.pressButton(button);
+      } else {
+        Joystick.releaseButton(button);
+      }
+
+      change_detected = true;
+      button_state[button] = state;
+    } else {
+      // no change
+    }
+  }
+
   #endif
+
+  if (change_detected == true) {
+    Joystick.sendState();
+  }
 }
