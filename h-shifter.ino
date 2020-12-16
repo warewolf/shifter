@@ -275,19 +275,25 @@ void loop() {
 
   */
 
-  // adjust to sensor calibration
+
+  // cap to calibration bounds if outside bounds
+  x_real = x_real < cal.x_min ? cal.x_min : x_real;
+  x_real = x_real > cal.x_max ? cal.x_max : x_real;
+  y_real = y_real < cal.y_min ? cal.y_min : y_real;
+  y_real = y_real > cal.y_max ? cal.y_max : y_real;
+
+  // adjust to sensor calibration range
   #if INVERT_X == true
-  x_pos = map(x_real < cal.x_min ? cal.x_min : x_real, cal.x_min, cal.x_max, 1023, 1);
+  x_pos = map(x_real, cal.x_min, cal.x_max, 1023, 1);
   #else
-  x_pos = map(x_real < cal.x_min ? cal.x_min : x_real, cal.x_min, cal.x_max, 1, 1023);
+  x_pos = map(x_real, cal.x_min, cal.x_max, 1, 1023);
   #endif
 
   #if INVERT_Y == true
-  y_pos = map(y_real < cal.y_min ? cal.y_min : y_real, cal.y_min, cal.y_max, 1023, 1);
+  y_pos = map(y_real, cal.y_min, cal.y_max, 1023, 1);
   #else
-  y_pos = map(y_real < cal.y_min ? cal.y_min : y_real, cal.y_min, cal.y_max, 1, 1023);
+  y_pos = map(y_real, cal.y_min, cal.y_max, 1, 1023);
   #endif
-
 
   /*
     for position -> coordinate lookups, we skip the 0th index of the ranges array
