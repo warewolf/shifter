@@ -12,6 +12,33 @@ struct Calibration {
 // give it some bullshit values
 struct Calibration cal = { 512,512,512, 512} ;
 
+/*
+
+N = north
+a = analog sensor
+S = south
+| = middle region of a rare earth magnet
+
+If you have the sensor placed between two magnets, set DUAL_MAGNETS true.
+
+   DUAL: SN    a    SN
+
+If you have the sensor placed at the face of a magnet that has both poles, set DUAL_MAGNETS false.
+
+
+   SINGLE: S|N
+            a
+
+The difference is how the "center" point is calculated.  In dual mode, no conversion is done, all the way to the left is 0, all the way to the right is 1023.
+In single mode, the 0 through 1023 scale is split in half in the center, then both halves have their order inverted.  So it goes from 1023 to 511, then 0 to 512.  This permits the *very* twiddly point in the magnet where both poles are VERY close to each other to be in the middle of the range, rather than polar extremes.
+
+If you want a *lot* of travel distance in your shifter, use dual magnets mode.  If you want short travel distance in your shifter, use a single magnet.
+
+*/
+
+#define DUAL_MAGNETS true
+
+
 unsigned int x_pos = 0, y_pos = 0;
 
 /*
@@ -230,7 +257,6 @@ void calibrate() {
       y_last = y_val;
     } 
 
-        
     if (x_val > cal.x_max) {
       cal.x_max = x_val;
     } else if (x_val < cal.x_min) {
@@ -282,6 +308,7 @@ void loop() {
   y_real = y_real < cal.y_min ? cal.y_min : y_real;
   y_real = y_real > cal.y_max ? cal.y_max : y_real;
 
+
   // adjust to sensor calibration range
   #if INVERT_X == true
   x_pos = map(x_real, cal.x_min, cal.x_max, 1023, 1);
@@ -293,6 +320,25 @@ void loop() {
   y_pos = map(y_real, cal.y_min, cal.y_max, 1023, 1);
   #else
   y_pos = map(y_real, cal.y_min, cal.y_max, 1, 1023);
+  #endif
+
+  #if DUAL_MAGNETS == false
+  // do conversion
+  if (x_real > 511) {
+    // chop off the top half
+    x_real = x_real & 511;
+  } else {
+    // invert it
+    x_real = (x_real ^ 511) & 1023;
+  }
+
+  if (y_real > 511) {
+    // chop off the top half
+    y_real = y_real & 511;
+  } else {
+    // invert it
+    y_real = (y_real ^ 511) & 1023;
+  }
   #endif
 
   /*
